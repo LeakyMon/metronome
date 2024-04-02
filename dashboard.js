@@ -1,5 +1,5 @@
-const apiBaseUrl = 'http://your-rpi-ip-address:port';
-
+const apiBaseUrl = 'http:// rpi-ip-address:port';
+//gotta find te arpi ip address 
 function refreshBPM() {
     fetch(`${apiBaseUrl}/bpm/`)
         .then(response => response.json())
