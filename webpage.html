@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>BPM Dashboard</title>
+    <style>
+        
+        body {
+            font-family: Arial, sans-serif;
+        }
+        .container {
+            max-width: 600px;
+            margin: auto;
+            padding: 20px;
+        }
+        .display {
+            margin-bottom: 20px;
+        }
+       
+        header {
+            width: 100%; 
+            background-color: gray; 
+            padding: 10px 0; 
+            text-align: center; 
+            box-shadow: 0px 2px 5px rgba(0,0,0,0.2);
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>BPM Dashboard</h1>
+    </header>
+    <div class="container">
+      
+        <div class="display">
+            Current BPM: <span id="current-bpm">0</span><br>
+            Minimum BPM: <span id="min-bpm">0</span><br>
+            Maximum BPM: <span id="max-bpm">0</span>
+        </div>
+        <button onclick="refreshBPM()">Refresh BPM</button>
+        <button onclick="resetMinMax()">Reset Min/Max</button><br><br>
+        <input type="number" id="new-bpm" placeholder="Enter new BPM">
+        <button onclick="setBPM()">Set New BPM</button>
+    </div>
+
+    <script src="dashboard.js"></script>
+</body>
+</html>
