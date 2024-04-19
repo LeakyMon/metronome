@@ -1,93 +1,123 @@
-#include <chrono>
+#include <gpiod.h>
+#include <iostream>
+#include <unistd.h>
+#include <csignal>
+#include <signal.h>
 #include <thread>
-using namespace std::chrono_literals;
 
-#include <cpprest/http_msg.h>
-#include <wiringPi.h>
+gpiod_chip *chip = nullptr;
+gpiod_line *input_line = nullptr;
+gpiod_line *output_line = nullptr;
 
-#include "metronome.hpp"
-#include "rest.hpp"
 
-// ** Remember to update these numbers to your personal setup. **
-#define LED_RED   17
-#define LED_GREEN 27
-#define BTN_MODE  23
-#define BTN_TAP   24
-
-// Mark as volatile to ensure it works multi-threaded.
-volatile bool btn_mode_pressed = false;
-
-// Run an additional loop separate from the main one.
-void blink() {
-	bool on = false;
-	// ** This loop manages LED blinking. **
-	while (true) {
-		// The LED state will toggle once every second.
-		std::this_thread::sleep_for(1s);
-
-		// Perform the blink if we are pressed,
-		// otherwise just set it to off.
-		if (btn_mode_pressed)
-			on = !on;
-		else
-			on = false;
-
-		// HIGH/LOW probably equal 1/0, but be explicit anyways.
-		digitalWrite(LED_RED, (on) ? HIGH : LOW);
-	}
+void cleanup() {
+    if (output_line) {
+        gpiod_line_set_value(output_line, 0);  // Set the line to low
+        gpiod_line_release(output_line);       // Release the line
+    }
+     if (input_line) {
+        gpiod_line_set_value(input_line, 0);  // Set the line to low
+        gpiod_line_release(input_line);
+    }
+    if (chip) {
+        gpiod_chip_close(chip);  // Close the GPIO chip
+    }
 }
 
-// This is called when a GET request is made to "/answer".
-void get42(web::http::http_request msg) {
-	msg.reply(200, web::json::value::number(42));
+void signalHandler(int signum) {
+    std::cout << "Interrupt signal (" << signum << ") received.\n";
+
+    if (output_line) {
+        std::cout<<"Light"<<std::endl;
+    gpiod_line_set_value(output_line, 0);  // Turn off the light
+    gpiod_line_release(output_line);
+    }
+    if (input_line) {
+        std::cout<<"Btn"<<std::endl;
+        gpiod_line_release(input_line);
+    }
+    if (chip) {
+        std::cout<<"Chip"<<std::endl;
+        gpiod_chip_close(chip);
+    }
+    else{
+        std::cout<<"A;; clear"<<std::endl;
+    }
+
+    exit(signum);
 }
 
-// This program shows an example of input/output with GPIO, along with
-// a dummy REST service.
-// ** You will have to replace this with your metronome logic, but the
-//    structure of this program is very relevant to what you need. **
+
+
+
+void check_button(gpiod_line* input_line, gpiod_line* output_line) {
+    int last_val = gpiod_line_get_value(input_line);
+    std::cout << "Last val " << last_val << std::endl;
+
+    while (true) {
+        int val = gpiod_line_get_value(input_line);
+
+        if (val != last_val) {
+            if (val == 1) {
+                std::cout << "Button pressed" << std::endl;
+                gpiod_line_set_value(output_line, 1);
+                std::this_thread::sleep_for(std::chrono::milliseconds(500)); // Debounce delay
+            } else {
+                gpiod_line_set_value(output_line, 0);
+            }
+            last_val = val;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Check every 100 ms
+    }
+}
+
 int main() {
-	// WiringPi must be initialized at the very start.
-	// This setup method uses the Broadcom pin numbers. These are the
-	// larger numbers like 17, 24, etc, not the 0-16 virtual ones.
-	wiringPiSetupGpio();
+    const char *chipname = "gpiochip4"; // Use the appropriate chip name
+    const unsigned int input_line_offset = 17; // GPIO pin for the button
+    const unsigned int output_line_offset = 23; // GPIO pin for the output
+    signal(SIGINT, signalHandler);
 
-	// Set up the directions of the pins.
-	// Be careful here, an input pin set as an output could burn out.
-	pinMode(LED_RED, OUTPUT);
-	pinMode(BTN_MODE, INPUT);
-	// Note that you can also set a pull-down here for the button,
-	// if you do not want to use the physical resistor.
-	//pullUpDnControl(BTN_MODE, PUD_DOWN);
+    chip = gpiod_chip_open_by_name(chipname);
+    if (!chip) {
+        std::cerr << "Could not open chip." << std::endl;
+        return 1;
+    }
 
-	// Configure the rest services after setting up the pins,
-	// but before we start using them.
-	// ** You should replace these with the BPM endpoints. **
-	auto get42_rest = rest::make_endpoint("/answer");
-	get42_rest.support(web::http::methods::GET, get42);
+    input_line = gpiod_chip_get_line(chip, input_line_offset);
+    if (!input_line) {
+        std::cerr << "Could not get input line." << std::endl;
+        gpiod_chip_close(chip);
+        return 1;
+    }
 
-	// Start the endpoints in sequence.
-	get42_rest.open().wait();
+    output_line = gpiod_chip_get_line(chip, output_line_offset);
+    if (!output_line) {
+        std::cerr << "Could not get output line." << std::endl;
+        gpiod_chip_close(chip);
+        return 1;
+    }
 
-	// Use a separate thread for the blinking.
-	// This way we do not have to worry about any delays
-	// caused by polling the button state / etc.
-	std::thread blink_thread(blink);
-	blink_thread.detach();
+    // Request the input line with pull-up resistor
+    if (gpiod_line_request_input_flags(input_line, "input-check", GPIOD_LINE_REQUEST_FLAG_BIAS_PULL_UP) < 0) {
+        std::cerr << "Could not request input line with pull-up." << std::endl;
+        gpiod_chip_close(chip);
+        return 1;
+    }
 
-	// ** This loop manages reading button state. **
-	while (true) {
-		// We are using a pull-down, so pressed = HIGH.
-		// If you used a pull-up, compare with LOW instead.
-		btn_mode_pressed = (digitalRead(BTN_MODE) == HIGH);
-		// Delay a little bit so we do not poll too heavily.
-		std::this_thread::sleep_for(10ms);
+    if (gpiod_line_request_output(output_line, "output-control", 0) < 0) {
+        std::cerr << "Could not request output line." << std::endl;
+        gpiod_chip_close(chip);
+        return 1;
+    }
 
-		// ** Note that the above is for testing when the button
-		// is held down. For detecting "taps", or momentary
-		// pushes, you need to check for a "rising edge" -
-		// this is when the button changes from LOW to HIGH... **
-	}
+    check_button(input_line, output_line);
 
-	return 0;
+    gpiod_line_release(input_line);
+    gpiod_line_release(output_line);
+    gpiod_chip_close(chip);
+
+    cleanup();
+
+    return 0;
 }
+
